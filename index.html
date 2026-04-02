@@ -1,1 +1,439 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Water Sort Puzzle</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #f5f4f0;
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+}
+#game-wrap {
+  width: 100%;
+  max-width: 560px;
+  padding: 1.5rem 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.2rem;
+}
+#header {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+#stage-label { font-size: 13px; color: #888; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; }
+#move-count { font-size: 13px; color: #888; }
+#difficulty-label { font-size: 12px; color: #aaa; }
+#tubes-area {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+  width: 100%;
+}
+.tube-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+.tube {
+  width: 42px;
+  height: 152px;
+  border: 2px solid #ccc;
+  border-top: none;
+  border-radius: 0 0 21px 21px;
+  display: flex;
+  flex-direction: column-reverse;
+  overflow: hidden;
+  background: #ece9e0;
+  transition: transform 0.12s, border-color 0.15s, box-shadow 0.15s;
+}
+.tube.selected { border-color: #378ADD; transform: translateY(-10px); }
+.tube.complete { border-color: #639922; }
+.tube.hint-from {
+  border-color: #EF9F27;
+  box-shadow: 0 0 0 3px rgba(239,159,39,0.35);
+  transform: translateY(-8px);
+}
+.tube.hint-to {
+  border-color: #EF9F27;
+  box-shadow: 0 0 0 3px rgba(239,159,39,0.35);
+}
+.block { width: 100%; flex-shrink: 0; }
+.tube-index { font-size: 10px; color: #bbb; }
+#controls { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+#controls button {
+  font-size: 13px; padding: 7px 16px;
+  border-radius: 8px; cursor: pointer;
+  border: 1px solid #ccc;
+  background: #fff; color: #333;
+  transition: background 0.1s;
+}
+#controls button:hover { background: #f0f0f0; }
+#controls button:disabled { opacity: 0.5; cursor: default; }
+#btn-hint { border-color: #EF9F27; color: #a06a00; }
+#btn-hint:hover:not(:disabled) { background: #fff8ee; }
+#msg { font-size: 13px; color: #999; min-height: 18px; text-align: center; }
+#win-banner {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 1.5rem;
+  border: 1px solid #ddd;
+  border-radius: 12px;
+  background: #fff;
+  width: 100%;
+  max-width: 280px;
+  text-align: center;
+}
+#win-banner h2 { font-size: 20px; font-weight: 500; color: #333; }
+#win-banner p { font-size: 13px; color: #888; }
+#win-banner button {
+  padding: 8px 22px; border-radius: 8px;
+  border: 1px solid #ccc; background: #fff;
+  color: #333; font-size: 13px; cursor: pointer;
+}
+#win-banner button:hover { background: #f0f0f0; }
+#stage-dots { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; width: 100%; }
+.sdot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #ccc; cursor: pointer; transition: background 0.2s;
+}
+.sdot.done { background: #639922; }
+.sdot.current { background: #378ADD; }
+</style>
+</head>
+<body>
+<div id="game-wrap">
+  <div id="header">
+    <span id="stage-label">Stage 1</span>
+    <span id="move-count">Moves: 0</span>
+  </div>
+  <div id="difficulty-label"></div>
+  <div id="stage-dots"></div>
+  <div id="tubes-area"></div>
+  <div id="msg"></div>
+  <div id="controls">
+    <button onclick="undo()">↩ Undo</button>
+    <button onclick="resetStage()">Reset</button>
+    <button id="btn-hint" onclick="requestHint()">💡 Hint</button>
+    <button onclick="nextStage()" id="btn-next" style="display:none">Next →</button>
+  </div>
+  <div id="win-banner">
+    <h2>Solved! 🎉</h2>
+    <p id="win-detail"></p>
+    <button onclick="nextStage()">Next stage →</button>
+  </div>
+</div>
 
+<script>
+const COLORS = [
+  '#E24B4A','#378ADD','#639922','#EF9F27',
+  '#7F77DD','#D4537E','#1D9E75','#D85A30',
+  '#884400','#888780',
+];
+const CAP = 4;
+const TOTAL = 60;
+
+// ---- 難易度 ----
+function numColors(s) {
+  if (s < 10) return 3;
+  if (s < 20) return 4;
+  if (s < 30) return 5;
+  if (s < 40) return 6;
+  if (s < 50) return 7;
+  return 8;
+}
+function diffLabel(n) {
+  const nc = numColors(n);
+  return ['','','','初級','初中級','中級','中上級','上級','超上級'][nc] + ` — ${nc}色`;
+}
+
+// ---- シード乱数 ----
+function seededRand(seed) {
+  let s = seed >>> 0;
+  return () => { s = (Math.imul(1664525, s) + 1013904223) >>> 0; return s / 0x100000000; };
+}
+
+// ---- ゲームロジック ----
+function deepCopy(b) { return b.map(t => t.slice()); }
+
+function isComplete(t) {
+  if (!t.length) return true;
+  if (t.length !== CAP) return false;
+  return t[0]===t[1] && t[1]===t[2] && t[2]===t[3];
+}
+function isSolved(b) { return b.every(isComplete); }
+
+function canPour(b, f, t) {
+  if (f === t || !b[f].length || b[t].length === CAP) return false;
+  if (isComplete(b[f])) return false;
+  if (b[t].length && b[t][b[t].length-1] !== b[f][b[f].length-1]) return false;
+  return true;
+}
+function applyPour(b, f, t) {
+  const nb = deepCopy(b);
+  const col = nb[f][nb[f].length-1];
+  while (nb[f].length && nb[f][nb[f].length-1]===col && nb[t].length<CAP)
+    nb[t].push(nb[f].pop());
+  return nb;
+}
+function pourInPlace(b, f, t) {
+  const col = b[f][b[f].length-1];
+  while (b[f].length && b[f][b[f].length-1]===col && b[t].length<CAP)
+    b[t].push(b[f].pop());
+}
+function boardKey(b) { return b.map(t => t.join(',')).join('|'); }
+
+// ---- BFS（現在盤面から次の1手を返す） ----
+function bfsFirstMove(initial) {
+  if (isSolved(initial)) return 'solved';
+  const queue = [[initial, -1, -1]];
+  const visited = new Set([boardKey(initial)]);
+  let head = 0;
+  while (head < queue.length) {
+    const [board, ff, ft] = queue[head++];
+    const n = board.length;
+    for (let f = 0; f < n; f++) {
+      for (let t = 0; t < n; t++) {
+        if (!canPour(board, f, t)) continue;
+        const nb = applyPour(board, f, t);
+        const rf = ff < 0 ? f : ff;
+        const rt = ft < 0 ? t : ft;
+        if (isSolved(nb)) return [rf, rt];
+        const k = boardKey(nb);
+        if (!visited.has(k)) { visited.add(k); queue.push([nb, rf, rt]); }
+      }
+    }
+  }
+  return null;
+}
+
+// ---- ランダム生成 ----
+function generateBoard(nc, seed) {
+  const rand = seededRand(seed);
+  const blocks = [];
+  for (let c = 0; c < nc; c++) for (let i = 0; i < CAP; i++) blocks.push(c);
+  for (let i = blocks.length-1; i > 0; i--) {
+    const j = Math.floor(rand() * (i+1));
+    [blocks[i], blocks[j]] = [blocks[j], blocks[i]];
+  }
+  const tubes = [];
+  for (let i = 0; i < nc; i++) tubes.push(blocks.slice(i*CAP, (i+1)*CAP));
+  tubes.push([]);
+  return tubes;
+}
+
+function isSolvable(initial) {
+  if (isSolved(initial)) return false;
+  const queue = [initial];
+  const visited = new Set([boardKey(initial)]);
+  let head = 0;
+  while (head < queue.length) {
+    const board = queue[head++];
+    const n = board.length;
+    for (let f = 0; f < n; f++) {
+      for (let t = 0; t < n; t++) {
+        if (!canPour(board, f, t)) continue;
+        const nb = applyPour(board, f, t);
+        if (isSolved(nb)) return true;
+        const k = boardKey(nb);
+        if (!visited.has(k)) { visited.add(k); queue.push(nb); }
+      }
+    }
+  }
+  return false;
+}
+
+function makeSolvableStage(nc, baseSeed) {
+  for (let a = 0; a < 20000; a++) {
+    const t = generateBoard(nc, baseSeed * 31337 + a * 7919);
+    if (isSolvable(t)) return t;
+  }
+  return null;
+}
+
+// ---- ステージキャッシュ ----
+const stageCache = new Array(TOTAL).fill(null);
+
+function getStage(n) {
+  if (!stageCache[n]) {
+    stageCache[n] = makeSolvableStage(numColors(n), n + 1);
+  }
+  return stageCache[n];
+}
+
+// ---- ゲーム状態 ----
+let stage = 0, board = [], selected = null, moves = 0, history = [], cleared = new Set();
+let hintFrom = -1, hintTo = -1;
+
+// ---- ステージ開始 ----
+function startStage(n) {
+  stage = n;
+  const tubes = getStage(n);
+  board = deepCopy(tubes);
+  selected = null; moves = 0;
+  history = [deepCopy(board)];
+  hintFrom = -1; hintTo = -1;
+  document.getElementById('win-banner').style.display = 'none';
+  document.getElementById('btn-next').style.display = 'none';
+  document.getElementById('msg').textContent = '';
+  document.getElementById('difficulty-label').textContent = diffLabel(n);
+  document.getElementById('btn-hint').textContent = '💡 Hint';
+  render();
+}
+
+// ---- ヒント ----
+function requestHint() {
+  if (isSolved(board)) return;
+
+  // ヒント表示中なら消す
+  if (hintFrom >= 0) {
+    hintFrom = -1; hintTo = -1;
+    document.getElementById('msg').textContent = '';
+    render();
+    return;
+  }
+
+  document.getElementById('btn-hint').textContent = '💡 計算中...';
+  document.getElementById('msg').textContent = 'ヒントを計算中...';
+
+  // setTimeout で描画を先に反映してからBFS実行
+  setTimeout(() => {
+    const result = bfsFirstMove(deepCopy(board));
+    document.getElementById('btn-hint').textContent = '💡 Hint';
+
+    if (result === null) {
+      document.getElementById('msg').textContent = '詰んでいます。Resetしてください。';
+    } else if (result === 'solved') {
+      document.getElementById('msg').textContent = 'すでにクリアしています！';
+    } else {
+      hintFrom = result[0];
+      hintTo = result[1];
+      document.getElementById('msg').textContent = `ヒント: 管${hintFrom+1} → 管${hintTo+1}`;
+      render();
+    }
+  }, 30);
+}
+
+function clearHint() {
+  if (hintFrom >= 0) {
+    hintFrom = -1; hintTo = -1;
+    document.getElementById('msg').textContent = '';
+  }
+}
+
+// ---- 描画 ----
+function render() {
+  document.getElementById('stage-label').textContent = `Stage ${stage+1}`;
+  document.getElementById('move-count').textContent = `Moves: ${moves}`;
+  const area = document.getElementById('tubes-area');
+  area.innerHTML = '';
+  const blockH = 152 / CAP;
+  board.forEach((tube, idx) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'tube-wrap';
+    wrap.onclick = () => handleClick(idx);
+    const el = document.createElement('div');
+    const complete = isComplete(tube) && tube.length > 0;
+    let cls = 'tube';
+    if (selected === idx) cls += ' selected';
+    else if (idx === hintFrom) cls += ' hint-from';
+    else if (idx === hintTo) cls += ' hint-to';
+    else if (complete) cls += ' complete';
+    el.className = cls;
+    tube.forEach(ci => {
+      const b = document.createElement('div');
+      b.className = 'block';
+      b.style.height = blockH + 'px';
+      b.style.background = COLORS[ci % COLORS.length];
+      el.appendChild(b);
+    });
+    const lbl = document.createElement('span');
+    lbl.className = 'tube-index';
+    lbl.textContent = idx+1;
+    wrap.appendChild(el);
+    wrap.appendChild(lbl);
+    area.appendChild(wrap);
+  });
+  renderDots();
+}
+
+function renderDots() {
+  const dots = document.getElementById('stage-dots');
+  dots.innerHTML = '';
+  for (let i = 0; i < TOTAL; i++) {
+    const d = document.createElement('div');
+    d.className = 'sdot'+(cleared.has(i)?' done':'')+(i===stage?' current':'');
+    d.title = `Stage ${i+1}`;
+    d.onclick = e => { e.stopPropagation(); startStage(i); };
+    dots.appendChild(d);
+  }
+}
+
+// ---- 操作 ----
+function handleClick(idx) {
+  if (isSolved(board)) return;
+  clearHint();
+  if (selected === null) {
+    if (!board[idx].length) return;
+    selected = idx; render();
+  } else {
+    if (selected === idx) { selected = null; render(); return; }
+    if (canPour(board, selected, idx)) {
+      history.push(deepCopy(board));
+      pourInPlace(board, selected, idx);
+      moves++; selected = null; render();
+      if (isSolved(board)) {
+        cleared.add(stage);
+        document.getElementById('win-banner').style.display = 'flex';
+        document.getElementById('win-detail').textContent = `Stage ${stage+1} — ${moves}手でクリア！`;
+        document.getElementById('btn-next').style.display = 'inline-block';
+        renderDots();
+      }
+    } else {
+      document.getElementById('msg').textContent = 'その移動はできません';
+      selected = idx; render();
+      setTimeout(() => {
+        if (document.getElementById('msg').textContent === 'その移動はできません')
+          document.getElementById('msg').textContent = '';
+      }, 1200);
+    }
+  }
+}
+
+function undo() {
+  if (history.length <= 1) return;
+  clearHint();
+  history.pop(); board = deepCopy(history[history.length-1]);
+  moves = Math.max(0, moves-1); selected = null; render();
+}
+
+function resetStage() {
+  clearHint();
+  board = deepCopy(history[0]); history = [deepCopy(board)];
+  moves = 0; selected = null;
+  document.getElementById('win-banner').style.display = 'none';
+  document.getElementById('btn-next').style.display = 'none';
+  document.getElementById('btn-hint').textContent = '💡 Hint';
+  render();
+}
+
+function nextStage() {
+  if (stage+1 < TOTAL) startStage(stage+1);
+}
+
+startStage(0);
+</script>
+</body>
+</html>
